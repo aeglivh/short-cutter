@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import UrlInput from "@/components/url-input";
 import ResultsCard from "@/components/results-card";
 import TranscriptViewer from "@/components/transcript-viewer";
 import { ShortSuggestion, TranscriptSegment } from "@/lib/types";
+import { saveResult, loadResult } from "@/lib/storage";
 
 type InputMode = "url" | "paste";
 
@@ -31,6 +32,29 @@ export default function Home() {
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
+
+  const videoId = extractVideoId(url);
+
+  // Try to load cached results when URL changes
+  const tryLoadCached = useCallback(
+    (id: string) => {
+      if (!id) return;
+      const cached = loadResult(id);
+      if (cached) {
+        setShorts(cached.shorts);
+        setTranscript(cached.transcript);
+        setAnalyzed(true);
+      }
+    },
+    []
+  );
+
+  // Load cached on mount (from URL params) and when videoId changes
+  useEffect(() => {
+    if (videoId) {
+      tryLoadCached(videoId);
+    }
+  }, [videoId, tryLoadCached]);
 
   const handleAnalyze = async () => {
     if (mode === "url" && !url.trim()) return;
@@ -61,6 +85,12 @@ export default function Home() {
       } else {
         setShorts(data.shorts);
         setTranscript(data.transcript || []);
+
+        // Save to local storage
+        const id = extractVideoId(url);
+        if (id) {
+          saveResult(id, url, data.shorts, data.transcript || []);
+        }
       }
     } catch {
       setError("Failed to connect. Please try again.");
@@ -69,8 +99,6 @@ export default function Home() {
       setAnalyzed(true);
     }
   };
-
-  const videoId = extractVideoId(url);
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
