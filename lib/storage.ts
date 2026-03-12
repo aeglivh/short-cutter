@@ -2,7 +2,8 @@ import { ShortSuggestion, TranscriptSegment } from "./types";
 
 const STORAGE_KEY = "short-cutter-results";
 
-interface StoredResult {
+export interface StoredResult {
+  videoId: string;
   url: string;
   shorts: ShortSuggestion[];
   transcript: TranscriptSegment[];
@@ -47,7 +48,7 @@ export function saveResult(
     delete data.results[oldest[0]];
   }
 
-  data.results[videoId] = { url, shorts, transcript, timestamp: Date.now() };
+  data.results[videoId] = { videoId, url, shorts, transcript, timestamp: Date.now() };
   setStorage(data);
 }
 
@@ -62,9 +63,9 @@ export function loadResult(
 
 export function getAllResults(): StoredResult[] {
   const data = getStorage();
-  return Object.values(data.results).sort(
-    (a, b) => b.timestamp - a.timestamp
-  );
+  return Object.entries(data.results)
+    .map(([id, result]) => ({ ...result, videoId: id }))
+    .sort((a, b) => b.timestamp - a.timestamp);
 }
 
 export function clearResult(videoId: string) {

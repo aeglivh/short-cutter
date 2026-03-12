@@ -111,12 +111,20 @@ export default function Home() {
           <p className="text-zinc-400 text-lg">
             Find the best moments for Shorts in your videos.
           </p>
-          <a
-            href="/transcript"
-            className="text-sm text-zinc-500 hover:text-orange-400 transition-colors mt-2 inline-block"
-          >
-            Just need a transcript? →
-          </a>
+          <div className="flex justify-center gap-4 mt-2">
+            <a
+              href="/transcript"
+              className="text-sm text-zinc-500 hover:text-orange-400 transition-colors"
+            >
+              Transcript Generator
+            </a>
+            <a
+              href="/history"
+              className="text-sm text-zinc-500 hover:text-orange-400 transition-colors"
+            >
+              History
+            </a>
+          </div>
         </div>
 
         {/* Mode tabs */}
