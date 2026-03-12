@@ -8,6 +8,7 @@ import { loadEditorClipData } from "@/lib/storage";
 import { saveVideo, loadVideo, clearVideo } from "@/lib/video-store";
 
 type ExportFormat = "mp4" | "webm";
+type AspectRatio = "original" | "9:16";
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -61,6 +62,10 @@ export default function EditorPage() {
   const [activeClip, setActiveClip] = useState<number | null>(null);
   const [restoringVideo, setRestoringVideo] = useState(true);
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("original");
+  const [cropPosition, setCropPosition] = useState(50); // 0=left, 50=center, 100=right
+  const [videoWidth, setVideoWidth] = useState(0);
+  const [videoHeight, setVideoHeight] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
@@ -134,6 +139,8 @@ export default function EditorPage() {
     const onPause = () => setPlaying(false);
     const onLoadedMetadata = () => {
       setDuration(video.duration);
+      setVideoWidth(video.videoWidth);
+      setVideoHeight(video.videoHeight);
       // Only set end to full duration if no clip is active
       if (endTime === 0) {
         setEndTime(video.duration);
@@ -326,14 +333,26 @@ export default function EditorPage() {
       await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
 
       const clipDur = endTime - startTime;
-      const args = [
+      const args: string[] = [
         "-ss", startTime.toFixed(3),
         "-i", inputName,
         "-t", clipDur.toFixed(3),
-        "-c", "copy",
-        "-avoid_negative_ts", "make_zero",
-        outputName,
       ];
+
+      if (aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0) {
+        // Crop to 9:16 from the source video
+        const targetW = Math.round(videoHeight * 9 / 16);
+        const cropW = Math.min(targetW, videoWidth);
+        const maxX = videoWidth - cropW;
+        const cropX = Math.round(maxX * (cropPosition / 100));
+        args.push("-vf", `crop=${cropW}:${videoHeight}:${cropX}:0`);
+        args.push("-c:v", "libx264", "-preset", "fast", "-crf", "23");
+        args.push("-c:a", "aac");
+      } else {
+        args.push("-c", "copy");
+      }
+
+      args.push("-avoid_negative_ts", "make_zero", outputName);
 
       await ffmpeg.exec(args);
 
@@ -344,7 +363,8 @@ export default function EditorPage() {
       const a = document.createElement("a");
       a.href = url;
       const clipLabel = activeClip !== null ? `_short${activeClip + 1}` : `_clip_${formatTime(startTime).replace(":", "m").replace(".", "s")}-${formatTime(endTime).replace(":", "m").replace(".", "s")}`;
-      a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}${clipLabel}.${exportFormat}`;
+      const ratioLabel = aspectRatio === "9:16" ? "_9x16" : "";
+      a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}${clipLabel}${ratioLabel}.${exportFormat}`;
       a.click();
       URL.revokeObjectURL(url);
 
@@ -465,13 +485,45 @@ export default function EditorPage() {
             </div>
 
             {/* Video */}
-            <div className="bg-black rounded-lg overflow-hidden">
+            <div className="bg-black rounded-lg overflow-hidden relative">
               <video
                 ref={videoRef}
                 src={videoUrl}
                 className="w-full max-h-[60vh] mx-auto"
                 onClick={togglePlay}
               />
+              {/* 9:16 crop overlay */}
+              {aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0 && (
+                (() => {
+                  const targetW = Math.min(Math.round(videoHeight * 9 / 16), videoWidth);
+                  const cropWidthPct = (targetW / videoWidth) * 100;
+                  const maxOffset = 100 - cropWidthPct;
+                  const leftPct = maxOffset * (cropPosition / 100);
+                  return (
+                    <>
+                      {/* Left darkened area */}
+                      {leftPct > 0 && (
+                        <div
+                          className="absolute top-0 bottom-0 left-0 bg-black/60 pointer-events-none"
+                          style={{ width: `${leftPct}%` }}
+                        />
+                      )}
+                      {/* Right darkened area */}
+                      {leftPct + cropWidthPct < 100 && (
+                        <div
+                          className="absolute top-0 bottom-0 right-0 bg-black/60 pointer-events-none"
+                          style={{ width: `${100 - leftPct - cropWidthPct}%` }}
+                        />
+                      )}
+                      {/* Crop border */}
+                      <div
+                        className="absolute top-0 bottom-0 border-x-2 border-orange-500/70 pointer-events-none"
+                        style={{ left: `${leftPct}%`, width: `${cropWidthPct}%` }}
+                      />
+                    </>
+                  );
+                })()
+              )}
             </div>
 
             {/* Playback controls */}
@@ -682,8 +734,27 @@ export default function EditorPage() {
             </div>
 
             {/* Export section */}
-            <div className="border-t border-zinc-800 pt-6 mt-6">
+            <div className="border-t border-zinc-800 pt-6 mt-6 space-y-4">
               <div className="flex items-end gap-4 flex-wrap">
+                <div className="space-y-1">
+                  <label className="text-xs text-zinc-500 uppercase tracking-wider">Aspect Ratio</label>
+                  <div className="flex gap-1">
+                    {(["original", "9:16"] as AspectRatio[]).map((ratio) => (
+                      <button
+                        key={ratio}
+                        onClick={() => setAspectRatio(ratio)}
+                        className={`px-3 py-2 text-sm rounded-lg transition-colors cursor-pointer ${
+                          aspectRatio === ratio
+                            ? "bg-orange-600 text-white"
+                            : "bg-zinc-800 text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        {ratio === "original" ? "Original" : "9:16"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-xs text-zinc-500 uppercase tracking-wider">Format</label>
                   <div className="flex gap-1">
@@ -741,6 +812,44 @@ export default function EditorPage() {
                     className="h-full bg-orange-500 transition-all duration-300"
                     style={{ width: `${exportProgress}%` }}
                   />
+                </div>
+              )}
+
+              {aspectRatio === "9:16" && (
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-zinc-500 uppercase tracking-wider">Crop Position</label>
+                    <div className="flex gap-2">
+                      {[
+                        { label: "Left", value: 0 },
+                        { label: "Center", value: 50 },
+                        { label: "Right", value: 100 },
+                      ].map(({ label, value }) => (
+                        <button
+                          key={label}
+                          onClick={() => setCropPosition(value)}
+                          className={`px-2 py-1 text-xs rounded transition-colors cursor-pointer ${
+                            cropPosition === value
+                              ? "bg-zinc-700 text-white"
+                              : "text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={cropPosition}
+                    onChange={(e) => setCropPosition(Number(e.target.value))}
+                    className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                  />
+                  <p className="text-xs text-zinc-600 text-center">
+                    Drag to choose which part of the frame to keep
+                  </p>
                 </div>
               )}
             </div>
