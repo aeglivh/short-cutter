@@ -32,13 +32,44 @@ export async function fetchTranscript(
     return [];
   }
 
-  return result.content.map(
+  const raw = result.content.map(
     (item: { text: string; offset: number; duration: number }) => ({
       text: item.text,
       offset: Math.floor(item.offset / 1000),
       duration: Math.floor(item.duration / 1000),
     })
   );
+
+  return mergeSegments(raw);
+}
+
+/**
+ * Merge tiny caption fragments into readable sentences.
+ * Groups segments until we hit a sentence-ending punctuation
+ * or exceed ~10 seconds, whichever comes first.
+ */
+function mergeSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  if (segments.length === 0) return [];
+
+  const merged: TranscriptSegment[] = [];
+  let current = { ...segments[0] };
+
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    const gap = seg.offset - current.offset;
+    const endsWithPunctuation = /[.!?]$/.test(current.text);
+
+    if (gap > 10 || endsWithPunctuation) {
+      merged.push(current);
+      current = { ...seg };
+    } else {
+      current.text += " " + seg.text;
+      current.duration = seg.offset + seg.duration - current.offset;
+    }
+  }
+
+  merged.push(current);
+  return merged;
 }
 
 export function parseManualTranscript(text: string): TranscriptSegment[] {
