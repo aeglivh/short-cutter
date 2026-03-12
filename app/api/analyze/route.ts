@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
 
     if (!url || typeof url !== "string") {
       return NextResponse.json(
-        { shorts: [], error: "Please provide a YouTube URL" } as AnalyzeResponse,
+        { shorts: [], transcript: [], error: "Please provide a YouTube URL" } as AnalyzeResponse,
         { status: 400 }
       );
     }
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const videoId = extractVideoId(url);
     if (!videoId) {
       return NextResponse.json(
-        { shorts: [], error: "Invalid YouTube URL. Paste a link like https://youtube.com/watch?v=..." } as AnalyzeResponse,
+        { shorts: [], transcript: [], error: "Invalid YouTube URL. Paste a link like https://youtube.com/watch?v=..." } as AnalyzeResponse,
         { status: 400 }
       );
     }
@@ -29,14 +29,14 @@ export async function POST(req: NextRequest) {
       segments = await fetchTranscript(videoId);
     } catch {
       return NextResponse.json(
-        { shorts: [], error: "Could not fetch captions for this video. Make sure the video has captions enabled." } as AnalyzeResponse,
+        { shorts: [], transcript: [], error: "Could not fetch captions for this video. Make sure the video has captions enabled." } as AnalyzeResponse,
         { status: 422 }
       );
     }
 
     if (segments.length === 0) {
       return NextResponse.json(
-        { shorts: [], error: "This video has no captions available." } as AnalyzeResponse,
+        { shorts: [], transcript: [], error: "This video has no captions available." } as AnalyzeResponse,
         { status: 422 }
       );
     }
@@ -44,11 +44,11 @@ export async function POST(req: NextRequest) {
     const formatted = formatTranscript(segments);
     const shorts = await analyzeTranscript(formatted);
 
-    return NextResponse.json({ shorts } as AnalyzeResponse);
+    return NextResponse.json({ shorts, transcript: segments } as AnalyzeResponse);
   } catch (error) {
     console.error("Analysis failed:", error);
     return NextResponse.json(
-      { shorts: [], error: "Something went wrong analyzing the video. Please try again." } as AnalyzeResponse,
+      { shorts: [], transcript: [], error: "Something went wrong analyzing the video. Please try again." } as AnalyzeResponse,
       { status: 500 }
     );
   }

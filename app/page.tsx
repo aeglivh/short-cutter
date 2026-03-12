@@ -3,7 +3,8 @@
 import { useState } from "react";
 import UrlInput from "@/components/url-input";
 import ResultsCard from "@/components/results-card";
-import { ShortSuggestion } from "@/lib/types";
+import TranscriptViewer from "@/components/transcript-viewer";
+import { ShortSuggestion, TranscriptSegment } from "@/lib/types";
 
 function extractVideoId(url: string): string {
   const patterns = [
@@ -23,6 +24,7 @@ export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [shorts, setShorts] = useState<ShortSuggestion[]>([]);
+  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [analyzed, setAnalyzed] = useState(false);
 
@@ -32,6 +34,7 @@ export default function Home() {
     setLoading(true);
     setError(null);
     setShorts([]);
+    setTranscript([]);
     setAnalyzed(false);
 
     try {
@@ -47,6 +50,7 @@ export default function Home() {
         setError(data.error);
       } else {
         setShorts(data.shorts);
+        setTranscript(data.transcript || []);
       }
     } catch {
       setError("Failed to connect. Please try again.");
@@ -129,6 +133,11 @@ export default function Home() {
               />
             ))}
           </div>
+        )}
+
+        {/* Transcript */}
+        {transcript.length > 0 && (
+          <TranscriptViewer segments={transcript} videoId={videoId} />
         )}
 
         {/* Empty state after analysis */}

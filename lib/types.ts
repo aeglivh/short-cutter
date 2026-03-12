@@ -15,5 +15,6 @@ export interface ShortSuggestion {
 
 export interface AnalyzeResponse {
   shorts: ShortSuggestion[];
+  transcript: TranscriptSegment[];
   error?: string;
 }
