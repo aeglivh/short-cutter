@@ -33,6 +33,12 @@ function shortTimeToSeconds(time: string): number {
   return 0;
 }
 
+function getExtension(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  if (ext && ["mp4", "webm", "mov", "avi", "mkv"].includes(ext)) return `.${ext}`;
+  return ".mp4";
+}
+
 const CLIP_COLORS = [
   { bg: "bg-blue-500/20", border: "border-blue-500/50", text: "text-blue-400", solid: "bg-blue-500" },
   { bg: "bg-emerald-500/20", border: "border-emerald-500/50", text: "text-emerald-400", solid: "bg-emerald-500" },
@@ -63,14 +69,23 @@ export default function EditorPage() {
   const [restoringVideo, setRestoringVideo] = useState(true);
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("original");
-  const [cropPosition, setCropPosition] = useState(50); // 0=left, 50=center, 100=right
+  const [cropPosition, setCropPosition] = useState(50);
   const [videoWidth, setVideoWidth] = useState(0);
   const [videoHeight, setVideoHeight] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef<"start" | "end" | "playhead" | null>(null);
+
+  // Use refs so event listeners always see current values
+  const endTimeRef = useRef(endTime);
+  const startTimeRef = useRef(startTime);
+  const durationRef = useRef(duration);
+  endTimeRef.current = endTime;
+  startTimeRef.current = startTime;
+  durationRef.current = duration;
 
   // Load ffmpeg
   const loadFFmpeg = useCallback(async () => {
@@ -82,6 +97,9 @@ export default function EditorPage() {
       ffmpeg.on("progress", ({ progress }) => {
         setExportProgress(Math.round(progress * 100));
       });
+      ffmpeg.on("log", ({ message }) => {
+        console.log("[ffmpeg]", message);
+      });
       const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
       await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
@@ -89,14 +107,15 @@ export default function EditorPage() {
       });
       ffmpegRef.current = ffmpeg;
       setLoaded(true);
-    } catch {
+    } catch (e) {
+      console.error("FFmpeg load error:", e);
       setError("Failed to load video processor. Make sure your browser supports SharedArrayBuffer.");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Restore video from IndexedDB + load clips from localStorage on mount
+  // Restore video from IndexedDB + load clips on mount
   useEffect(() => {
     const restore = async () => {
       const stored = await loadVideo();
@@ -123,43 +142,58 @@ export default function EditorPage() {
     };
   }, [videoUrl]);
 
-  // Sync playhead with video
+  // Video event listeners — use refs to avoid stale closures
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
-      if (video.currentTime >= endTime && endTime > 0) {
+      const et = endTimeRef.current;
+      if (et > 0 && video.currentTime >= et) {
         video.pause();
         setPlaying(false);
       }
     };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    const onSeeked = () => setCurrentTime(video.currentTime);
     const onLoadedMetadata = () => {
       setDuration(video.duration);
+      durationRef.current = video.duration;
       setVideoWidth(video.videoWidth);
       setVideoHeight(video.videoHeight);
-      // Only set end to full duration if no clip is active
-      if (endTime === 0) {
+      if (endTimeRef.current === 0) {
         setEndTime(video.duration);
         setEndInput(formatTime(video.duration));
+        endTimeRef.current = video.duration;
       }
     };
 
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
+    video.addEventListener("seeked", onSeeked);
     video.addEventListener("loadedmetadata", onLoadedMetadata);
 
     return () => {
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
+      video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("loadedmetadata", onLoadedMetadata);
     };
-  }, [endTime]);
+  // Only re-attach when videoUrl changes (new video loaded)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoUrl]);
+
+  const seekTo = useCallback((time: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const clamped = Math.max(0, Math.min(time, durationRef.current));
+    video.currentTime = clamped;
+    // currentTime will update via seeked event
+  }, []);
 
   const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith("video/")) {
@@ -171,6 +205,8 @@ export default function EditorPage() {
     setVideoUrl(URL.createObjectURL(file));
     setStartTime(0);
     setEndTime(0);
+    endTimeRef.current = 0;
+    startTimeRef.current = 0;
     setStartInput("0:00.0");
     setEndInput("0:00.0");
     setCurrentTime(0);
@@ -211,18 +247,11 @@ export default function EditorPage() {
     if (playing) {
       video.pause();
     } else {
-      if (video.currentTime >= endTime || video.currentTime < startTime) {
-        video.currentTime = startTime;
+      if (video.currentTime >= endTimeRef.current || video.currentTime < startTimeRef.current) {
+        video.currentTime = startTimeRef.current;
       }
       video.play();
     }
-  };
-
-  const seekTo = (time: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(time, duration));
-    setCurrentTime(video.currentTime);
   };
 
   const setStart = () => {
@@ -240,7 +269,7 @@ export default function EditorPage() {
   };
 
   const handleStartInputBlur = () => {
-    const t = Math.max(0, Math.min(parseTime(startInput), endTime - 0.1));
+    const t = Math.max(0, Math.min(parseTime(startInput), endTimeRef.current - 0.1));
     setStartTime(t);
     setStartInput(formatTime(t));
     seekTo(t);
@@ -248,47 +277,53 @@ export default function EditorPage() {
   };
 
   const handleEndInputBlur = () => {
-    const t = Math.max(startTime + 0.1, Math.min(parseTime(endInput), duration));
+    const t = Math.max(startTimeRef.current + 0.1, Math.min(parseTime(endInput), durationRef.current));
     setEndTime(t);
     setEndInput(formatTime(t));
     setActiveClip(null);
   };
 
   // Select a clip from the shorts list
-  const selectClip = (index: number) => {
+  const selectClip = useCallback((index: number) => {
     const clip = clips[index];
+    if (!clip) return;
     const s = shortTimeToSeconds(clip.startTime);
     const e = shortTimeToSeconds(clip.endTime);
     setStartTime(s);
     setEndTime(e);
+    startTimeRef.current = s;
+    endTimeRef.current = e;
     setStartInput(formatTime(s));
     setEndInput(formatTime(e));
     setActiveClip(index);
     seekTo(s);
-  };
+  }, [clips, seekTo]);
 
   // Timeline drag handling
-  const getTimeFromMouse = (e: React.MouseEvent | MouseEvent) => {
+  const getTimeFromMouse = useCallback((e: React.MouseEvent | MouseEvent) => {
     const rect = timelineRef.current?.getBoundingClientRect();
-    if (!rect || !duration) return 0;
+    if (!rect || !durationRef.current) return 0;
     const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-    return (x / rect.width) * duration;
-  };
+    return (x / rect.width) * durationRef.current;
+  }, []);
 
-  const handleTimelineMouseDown = (e: React.MouseEvent, handle: "start" | "end" | "playhead") => {
+  const handleTimelineMouseDown = useCallback((e: React.MouseEvent, handle: "start" | "end" | "playhead") => {
     e.preventDefault();
+    e.stopPropagation();
     draggingRef.current = handle;
 
     const onMove = (ev: MouseEvent) => {
       const t = getTimeFromMouse(ev);
       if (draggingRef.current === "start") {
-        const clamped = Math.max(0, Math.min(t, endTime - 0.1));
+        const clamped = Math.max(0, Math.min(t, endTimeRef.current - 0.1));
         setStartTime(clamped);
+        startTimeRef.current = clamped;
         setStartInput(formatTime(clamped));
         setActiveClip(null);
       } else if (draggingRef.current === "end") {
-        const clamped = Math.max(startTime + 0.1, Math.min(t, duration));
+        const clamped = Math.max(startTimeRef.current + 0.1, Math.min(t, durationRef.current));
         setEndTime(clamped);
+        endTimeRef.current = clamped;
         setEndInput(formatTime(clamped));
         setActiveClip(null);
       } else if (draggingRef.current === "playhead") {
@@ -304,12 +339,12 @@ export default function EditorPage() {
 
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
-  };
+  }, [getTimeFromMouse, seekTo]);
 
-  const handleTimelineClick = (e: React.MouseEvent) => {
+  const handleTimelineClick = useCallback((e: React.MouseEvent) => {
     if (draggingRef.current) return;
     seekTo(getTimeFromMouse(e));
-  };
+  }, [getTimeFromMouse, seekTo]);
 
   const previewTrim = () => {
     const video = videoRef.current;
@@ -317,6 +352,37 @@ export default function EditorPage() {
     video.currentTime = startTime;
     video.play();
   };
+
+  // Crop overlay drag on the video
+  const handleCropDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = videoContainerRef.current;
+    if (!container || videoWidth === 0 || videoHeight === 0) return;
+
+    const targetW = Math.min(Math.round(videoHeight * 9 / 16), videoWidth);
+    const cropWidthPct = targetW / videoWidth;
+
+    const onMove = (ev: MouseEvent) => {
+      const rect = container.getBoundingClientRect();
+      const x = (ev.clientX - rect.left) / rect.width;
+      // x is where the center of the crop should be
+      const halfCrop = cropWidthPct / 2;
+      const centerClamped = Math.max(halfCrop, Math.min(x, 1 - halfCrop));
+      const pos = (centerClamped - halfCrop) / (1 - cropWidthPct) * 100;
+      setCropPosition(Math.max(0, Math.min(100, pos)));
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+
+    // Also move on initial click
+    onMove(e.nativeEvent);
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [videoWidth, videoHeight]);
 
   // Export trimmed clip
   const handleExport = async () => {
@@ -340,29 +406,39 @@ export default function EditorPage() {
       ];
 
       if (aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0) {
-        // Crop to 9:16 from the source video
         const targetW = Math.round(videoHeight * 9 / 16);
         const cropW = Math.min(targetW, videoWidth);
         const maxX = videoWidth - cropW;
         const cropX = Math.round(maxX * (cropPosition / 100));
+        // Use crop filter and re-encode
         args.push("-vf", `crop=${cropW}:${videoHeight}:${cropX}:0`);
-        args.push("-c:v", "libx264", "-preset", "fast", "-crf", "23");
-        args.push("-c:a", "aac");
+        args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23");
+        args.push("-c:a", "aac", "-b:a", "128k");
       } else {
         args.push("-c", "copy");
       }
 
       args.push("-avoid_negative_ts", "make_zero", outputName);
 
-      await ffmpeg.exec(args);
+      console.log("[ffmpeg] Running:", args.join(" "));
+      const exitCode = await ffmpeg.exec(args);
+      console.log("[ffmpeg] Exit code:", exitCode);
+
+      if (exitCode !== 0) {
+        throw new Error(`ffmpeg exited with code ${exitCode}`);
+      }
 
       const data = await ffmpeg.readFile(outputName);
-      const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: exportFormat === "mp4" ? "video/mp4" : "video/webm" });
+      const blob = new Blob([new Uint8Array(data as Uint8Array)], {
+        type: exportFormat === "mp4" ? "video/mp4" : "video/webm",
+      });
       const url = URL.createObjectURL(blob);
 
       const a = document.createElement("a");
       a.href = url;
-      const clipLabel = activeClip !== null ? `_short${activeClip + 1}` : `_clip_${formatTime(startTime).replace(":", "m").replace(".", "s")}-${formatTime(endTime).replace(":", "m").replace(".", "s")}`;
+      const clipLabel = activeClip !== null
+        ? `_short${activeClip + 1}`
+        : `_clip_${formatTime(startTime).replace(":", "m").replace(".", "s")}-${formatTime(endTime).replace(":", "m").replace(".", "s")}`;
       const ratioLabel = aspectRatio === "9:16" ? "_9x16" : "";
       a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}${clipLabel}${ratioLabel}.${exportFormat}`;
       a.click();
@@ -370,8 +446,9 @@ export default function EditorPage() {
 
       await ffmpeg.deleteFile(inputName);
       await ffmpeg.deleteFile(outputName);
-    } catch {
-      setError("Export failed. Try a shorter clip or different format.");
+    } catch (e) {
+      console.error("Export error:", e);
+      setError(`Export failed: ${e instanceof Error ? e.message : "Unknown error"}. Check browser console for details.`);
     } finally {
       setExporting(false);
       setExportProgress(0);
@@ -383,7 +460,15 @@ export default function EditorPage() {
   const endPct = duration ? (endTime / duration) * 100 : 100;
   const playheadPct = duration ? (currentTime / duration) * 100 : 0;
 
-  // Show loading state while restoring
+  // Crop overlay calculations
+  const cropOverlay = aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0 ? (() => {
+    const targetW = Math.min(Math.round(videoHeight * 9 / 16), videoWidth);
+    const cropWidthPct = (targetW / videoWidth) * 100;
+    const maxOffset = 100 - cropWidthPct;
+    const leftPct = maxOffset * (cropPosition / 100);
+    return { cropWidthPct, leftPct };
+  })() : null;
+
   if (restoringVideo) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
@@ -410,15 +495,9 @@ export default function EditorPage() {
             Trim and export video clips right in your browser.
           </p>
           <div className="flex justify-center gap-4 mt-2">
-            <a href="/" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">
-              Short Finder
-            </a>
-            <a href="/transcript" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">
-              Transcript Generator
-            </a>
-            <a href="/history" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">
-              History
-            </a>
+            <a href="/" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">Short Finder</a>
+            <a href="/transcript" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">Transcript Generator</a>
+            <a href="/history" className="text-sm text-zinc-500 hover:text-orange-400 transition-colors">History</a>
           </div>
         </div>
 
@@ -435,9 +514,7 @@ export default function EditorPage() {
                     From: <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-orange-400 underline transition-colors">{sourceUrl}</a>
                   </p>
                 )}
-                <p className="text-zinc-500 text-xs">
-                  Drop the source video below to start cutting.
-                </p>
+                <p className="text-zinc-500 text-xs">Drop the source video below to start cutting.</p>
               </div>
             )}
             <div
@@ -449,13 +526,7 @@ export default function EditorPage() {
               }`}
               onClick={() => document.getElementById("file-input")?.click()}
             >
-              <input
-                id="file-input"
-                type="file"
-                accept="video/*"
-                onChange={handleFileInput}
-                className="hidden"
-              />
+              <input id="file-input" type="file" accept="video/*" onChange={handleFileInput} className="hidden" />
               <svg className="mx-auto mb-4 text-zinc-500" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
               </svg>
@@ -472,57 +543,68 @@ export default function EditorPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-zinc-400 text-sm font-mono">{videoFile.name}</span>
-                <span className="text-zinc-600 text-xs">
-                  ({(videoFile.size / 1024 / 1024).toFixed(1)} MB)
-                </span>
+                <span className="text-zinc-600 text-xs">({(videoFile.size / 1024 / 1024).toFixed(1)} MB)</span>
               </div>
-              <button
-                onClick={handleClearFile}
-                className="text-sm text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer"
-              >
+              <button onClick={handleClearFile} className="text-sm text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer">
                 Change file
               </button>
             </div>
 
-            {/* Video */}
-            <div className="bg-black rounded-lg overflow-hidden relative">
+            {/* Aspect ratio controls — above video so you see the overlay */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-zinc-500 uppercase tracking-wider">Aspect</span>
+              <div className="flex gap-1">
+                {(["original", "9:16"] as AspectRatio[]).map((ratio) => (
+                  <button
+                    key={ratio}
+                    onClick={() => setAspectRatio(ratio)}
+                    className={`px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer ${
+                      aspectRatio === ratio ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    {ratio === "original" ? "Original" : "9:16"}
+                  </button>
+                ))}
+              </div>
+              {cropOverlay && (
+                <span className="text-xs text-zinc-600 ml-2">Drag the crop overlay on the video to adjust</span>
+              )}
+            </div>
+
+            {/* Video with crop overlay */}
+            <div ref={videoContainerRef} className="bg-black rounded-lg overflow-hidden relative">
               <video
                 ref={videoRef}
                 src={videoUrl}
-                className="w-full max-h-[60vh] mx-auto"
+                className="w-full max-h-[60vh] mx-auto block"
                 onClick={togglePlay}
               />
-              {/* 9:16 crop overlay */}
-              {aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0 && (
-                (() => {
-                  const targetW = Math.min(Math.round(videoHeight * 9 / 16), videoWidth);
-                  const cropWidthPct = (targetW / videoWidth) * 100;
-                  const maxOffset = 100 - cropWidthPct;
-                  const leftPct = maxOffset * (cropPosition / 100);
-                  return (
-                    <>
-                      {/* Left darkened area */}
-                      {leftPct > 0 && (
-                        <div
-                          className="absolute top-0 bottom-0 left-0 bg-black/60 pointer-events-none"
-                          style={{ width: `${leftPct}%` }}
-                        />
-                      )}
-                      {/* Right darkened area */}
-                      {leftPct + cropWidthPct < 100 && (
-                        <div
-                          className="absolute top-0 bottom-0 right-0 bg-black/60 pointer-events-none"
-                          style={{ width: `${100 - leftPct - cropWidthPct}%` }}
-                        />
-                      )}
-                      {/* Crop border */}
-                      <div
-                        className="absolute top-0 bottom-0 border-x-2 border-orange-500/70 pointer-events-none"
-                        style={{ left: `${leftPct}%`, width: `${cropWidthPct}%` }}
-                      />
-                    </>
-                  );
-                })()
+              {/* 9:16 crop overlay — draggable */}
+              {cropOverlay && (
+                <>
+                  {/* Left dark */}
+                  {cropOverlay.leftPct > 0.1 && (
+                    <div
+                      className="absolute top-0 bottom-0 left-0 bg-black/60 cursor-ew-resize"
+                      style={{ width: `${cropOverlay.leftPct}%` }}
+                      onMouseDown={handleCropDrag}
+                    />
+                  )}
+                  {/* Right dark */}
+                  {cropOverlay.leftPct + cropOverlay.cropWidthPct < 99.9 && (
+                    <div
+                      className="absolute top-0 bottom-0 right-0 bg-black/60 cursor-ew-resize"
+                      style={{ width: `${100 - cropOverlay.leftPct - cropOverlay.cropWidthPct}%` }}
+                      onMouseDown={handleCropDrag}
+                    />
+                  )}
+                  {/* Crop border — also draggable */}
+                  <div
+                    className="absolute top-0 bottom-0 border-x-2 border-orange-500/70 cursor-ew-resize"
+                    style={{ left: `${cropOverlay.leftPct}%`, width: `${cropOverlay.cropWidthPct}%` }}
+                    onMouseDown={handleCropDrag}
+                  />
+                </>
               )}
             </div>
 
@@ -543,13 +625,9 @@ export default function EditorPage() {
                   </svg>
                 )}
               </button>
-              <span className="text-zinc-400 text-sm font-mono min-w-[70px] text-center">
-                {formatTime(currentTime)}
-              </span>
+              <span className="text-zinc-400 text-sm font-mono min-w-[70px] text-center">{formatTime(currentTime)}</span>
               <span className="text-zinc-600 text-sm">/</span>
-              <span className="text-zinc-500 text-sm font-mono min-w-[70px] text-center">
-                {formatTime(duration)}
-              </span>
+              <span className="text-zinc-500 text-sm font-mono min-w-[70px] text-center">{formatTime(duration)}</span>
             </div>
 
             {/* Timeline */}
@@ -559,7 +637,7 @@ export default function EditorPage() {
                 className="relative h-14 bg-zinc-900 rounded-lg cursor-pointer select-none"
                 onClick={handleTimelineClick}
               >
-                {/* Short clip markers (behind the active selection) */}
+                {/* Short clip markers */}
                 {duration > 0 && clips.map((clip, i) => {
                   const cs = shortTimeToSeconds(clip.startTime);
                   const ce = shortTimeToSeconds(clip.endTime);
@@ -648,9 +726,7 @@ export default function EditorPage() {
                         key={i}
                         onClick={() => selectClip(i)}
                         className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all cursor-pointer ${
-                          isActive
-                            ? "bg-zinc-800 border border-zinc-600"
-                            : "bg-zinc-900 border border-zinc-800 hover:border-zinc-700"
+                          isActive ? "bg-zinc-800 border border-zinc-600" : "bg-zinc-900 border border-zinc-800 hover:border-zinc-700"
                         }`}
                       >
                         <span className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white ${color.solid}`}>
@@ -658,14 +734,10 @@ export default function EditorPage() {
                         </span>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm text-white truncate">{clip.title}</p>
-                          <p className="text-xs text-zinc-500 font-mono">
-                            {clip.startTime} — {clip.endTime}
-                          </p>
+                          <p className="text-xs text-zinc-500 font-mono">{clip.startTime} — {clip.endTime}</p>
                         </div>
                         {isActive && (
-                          <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">
-                            Selected
-                          </span>
+                          <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">Selected</span>
                         )}
                       </button>
                     );
@@ -687,11 +759,7 @@ export default function EditorPage() {
                     onKeyDown={(e) => e.key === "Enter" && handleStartInputBlur()}
                     className="w-24 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm font-mono text-center focus:outline-none focus:border-orange-500"
                   />
-                  <button
-                    onClick={setStart}
-                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer"
-                    title="Set start to current position"
-                  >
+                  <button onClick={setStart} className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer" title="Set start to current position">
                     Set
                   </button>
                 </div>
@@ -708,11 +776,7 @@ export default function EditorPage() {
                     onKeyDown={(e) => e.key === "Enter" && handleEndInputBlur()}
                     className="w-24 px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm font-mono text-center focus:outline-none focus:border-orange-500"
                   />
-                  <button
-                    onClick={setEnd}
-                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer"
-                    title="Set end to current position"
-                  >
+                  <button onClick={setEnd} className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer" title="Set end to current position">
                     Set
                   </button>
                 </div>
@@ -720,15 +784,10 @@ export default function EditorPage() {
 
               <div className="flex items-center gap-2 px-3 py-2 bg-zinc-900 rounded-lg">
                 <span className="text-xs text-zinc-500">Duration:</span>
-                <span className="text-sm font-mono text-orange-400">
-                  {formatTime(Math.max(0, clipDuration))}
-                </span>
+                <span className="text-sm font-mono text-orange-400">{formatTime(Math.max(0, clipDuration))}</span>
               </div>
 
-              <button
-                onClick={previewTrim}
-                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer"
-              >
+              <button onClick={previewTrim} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm rounded-lg transition-colors cursor-pointer">
                 Preview clip
               </button>
             </div>
@@ -737,25 +796,6 @@ export default function EditorPage() {
             <div className="border-t border-zinc-800 pt-6 mt-6 space-y-4">
               <div className="flex items-end gap-4 flex-wrap">
                 <div className="space-y-1">
-                  <label className="text-xs text-zinc-500 uppercase tracking-wider">Aspect Ratio</label>
-                  <div className="flex gap-1">
-                    {(["original", "9:16"] as AspectRatio[]).map((ratio) => (
-                      <button
-                        key={ratio}
-                        onClick={() => setAspectRatio(ratio)}
-                        className={`px-3 py-2 text-sm rounded-lg transition-colors cursor-pointer ${
-                          aspectRatio === ratio
-                            ? "bg-orange-600 text-white"
-                            : "bg-zinc-800 text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        {ratio === "original" ? "Original" : "9:16"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1">
                   <label className="text-xs text-zinc-500 uppercase tracking-wider">Format</label>
                   <div className="flex gap-1">
                     {(["mp4", "webm"] as ExportFormat[]).map((fmt) => (
@@ -763,9 +803,7 @@ export default function EditorPage() {
                         key={fmt}
                         onClick={() => setExportFormat(fmt)}
                         className={`px-3 py-2 text-sm rounded-lg transition-colors cursor-pointer ${
-                          exportFormat === fmt
-                            ? "bg-orange-600 text-white"
-                            : "bg-zinc-800 text-zinc-400 hover:text-white"
+                          exportFormat === fmt ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
                         }`}
                       >
                         {fmt.toUpperCase()}
@@ -800,57 +838,22 @@ export default function EditorPage() {
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
                       </svg>
-                      Export clip
+                      Export clip {aspectRatio === "9:16" ? "(9:16)" : ""}
                     </>
                   )}
                 </button>
               </div>
 
               {exporting && (
-                <div className="mt-3 w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="h-full bg-orange-500 transition-all duration-300"
-                    style={{ width: `${exportProgress}%` }}
-                  />
+                <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                  <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${exportProgress}%` }} />
                 </div>
               )}
 
               {aspectRatio === "9:16" && (
-                <div className="mt-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs text-zinc-500 uppercase tracking-wider">Crop Position</label>
-                    <div className="flex gap-2">
-                      {[
-                        { label: "Left", value: 0 },
-                        { label: "Center", value: 50 },
-                        { label: "Right", value: 100 },
-                      ].map(({ label, value }) => (
-                        <button
-                          key={label}
-                          onClick={() => setCropPosition(value)}
-                          className={`px-2 py-1 text-xs rounded transition-colors cursor-pointer ${
-                            cropPosition === value
-                              ? "bg-zinc-700 text-white"
-                              : "text-zinc-500 hover:text-zinc-300"
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={cropPosition}
-                    onChange={(e) => setCropPosition(Number(e.target.value))}
-                    className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-orange-500"
-                  />
-                  <p className="text-xs text-zinc-600 text-center">
-                    Drag to choose which part of the frame to keep
-                  </p>
-                </div>
+                <p className="text-xs text-zinc-600">
+                  9:16 export requires re-encoding — will be slower than original ratio.
+                </p>
               )}
             </div>
           </div>
@@ -870,10 +873,4 @@ export default function EditorPage() {
       </div>
     </div>
   );
-}
-
-function getExtension(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase();
-  if (ext && ["mp4", "webm", "mov", "avi", "mkv"].includes(ext)) return `.${ext}`;
-  return ".mp4";
 }
