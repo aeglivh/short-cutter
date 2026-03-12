@@ -571,7 +571,7 @@ export default function EditorPage() {
               )}
             </div>
 
-            {/* Video with crop overlay */}
+            {/* Video with crop overlay + progress bar */}
             <div ref={videoContainerRef} className="bg-black rounded-lg overflow-hidden relative">
               <video
                 ref={videoRef}
@@ -582,7 +582,6 @@ export default function EditorPage() {
               {/* 9:16 crop overlay — draggable */}
               {cropOverlay && (
                 <>
-                  {/* Left dark */}
                   {cropOverlay.leftPct > 0.1 && (
                     <div
                       className="absolute top-0 bottom-0 left-0 bg-black/60 cursor-ew-resize"
@@ -590,7 +589,6 @@ export default function EditorPage() {
                       onMouseDown={handleCropDrag}
                     />
                   )}
-                  {/* Right dark */}
                   {cropOverlay.leftPct + cropOverlay.cropWidthPct < 99.9 && (
                     <div
                       className="absolute top-0 bottom-0 right-0 bg-black/60 cursor-ew-resize"
@@ -598,13 +596,33 @@ export default function EditorPage() {
                       onMouseDown={handleCropDrag}
                     />
                   )}
-                  {/* Crop border — also draggable */}
                   <div
                     className="absolute top-0 bottom-0 border-x-2 border-orange-500/70 cursor-ew-resize"
                     style={{ left: `${cropOverlay.leftPct}%`, width: `${cropOverlay.cropWidthPct}%` }}
                     onMouseDown={handleCropDrag}
                   />
                 </>
+              )}
+              {/* Progress bar on video */}
+              {duration > 0 && (
+                <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40 group hover:h-3 transition-all cursor-pointer"
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const x = (e.clientX - rect.left) / rect.width;
+                    seekTo(x * duration);
+                  }}
+                >
+                  {/* Selected clip region */}
+                  <div
+                    className="absolute top-0 bottom-0 bg-orange-500/30"
+                    style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
+                  />
+                  {/* Playback progress */}
+                  <div
+                    className="absolute top-0 bottom-0 left-0 bg-white/80 transition-[width] duration-100"
+                    style={{ width: `${playheadPct}%` }}
+                  />
+                </div>
               )}
             </div>
 
