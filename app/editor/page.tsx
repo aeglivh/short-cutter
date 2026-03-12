@@ -604,26 +604,38 @@ export default function EditorPage() {
                 </>
               )}
               {/* Progress bar on video */}
-              {duration > 0 && (
-                <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40 group hover:h-3 transition-all cursor-pointer"
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const x = (e.clientX - rect.left) / rect.width;
-                    seekTo(x * duration);
-                  }}
-                >
-                  {/* Selected clip region */}
-                  <div
-                    className="absolute top-0 bottom-0 bg-orange-500/30"
-                    style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
-                  />
-                  {/* Playback progress */}
-                  <div
-                    className="absolute top-0 bottom-0 left-0 bg-white/80 transition-[width] duration-100"
-                    style={{ width: `${playheadPct}%` }}
-                  />
-                </div>
-              )}
+              {duration > 0 && (() => {
+                const hasClip = clipDuration > 0.1 && (startTime > 0 || endTime < duration);
+                const clipProgress = hasClip
+                  ? Math.max(0, Math.min(100, ((currentTime - startTime) / clipDuration) * 100))
+                  : playheadPct;
+                return (
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/40 group hover:h-3 transition-all cursor-pointer"
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const x = (e.clientX - rect.left) / rect.width;
+                      if (hasClip) {
+                        seekTo(startTime + x * clipDuration);
+                      } else {
+                        seekTo(x * duration);
+                      }
+                    }}
+                  >
+                    {/* Full bar background with clip region indicator (only in full mode) */}
+                    {!hasClip && (
+                      <div
+                        className="absolute top-0 bottom-0 bg-orange-500/30"
+                        style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
+                      />
+                    )}
+                    {/* Playback progress */}
+                    <div
+                      className="absolute top-0 bottom-0 left-0 bg-white/80 transition-[width] duration-100"
+                      style={{ width: `${clipProgress}%` }}
+                    />
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Playback controls */}
