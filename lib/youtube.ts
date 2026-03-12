@@ -1,4 +1,4 @@
-import { YoutubeTranscript } from "youtube-transcript";
+import { getSubtitles } from "youtube-caption-extractor";
 import { TranscriptSegment } from "./types";
 
 export function extractVideoId(url: string): string | null {
@@ -19,12 +19,12 @@ export function extractVideoId(url: string): string | null {
 export async function fetchTranscript(
   videoId: string
 ): Promise<TranscriptSegment[]> {
-  const raw = await YoutubeTranscript.fetchTranscript(videoId);
+  const captions = await getSubtitles({ videoID: videoId, lang: "en" });
 
-  return raw.map((segment) => ({
-    text: segment.text,
-    offset: Math.floor(segment.offset / 1000),
-    duration: Math.floor(segment.duration / 1000),
+  return captions.map((caption) => ({
+    text: caption.text,
+    offset: Math.floor(parseFloat(caption.start)),
+    duration: Math.floor(parseFloat(caption.dur)),
   }));
 }
 
