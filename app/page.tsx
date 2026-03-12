@@ -83,6 +83,12 @@ export default function Home() {
           <p className="text-zinc-400 text-lg">
             Find the best moments for Shorts in your videos.
           </p>
+          <a
+            href="/transcript"
+            className="text-sm text-zinc-500 hover:text-orange-400 transition-colors mt-2 inline-block"
+          >
+            Just need a transcript? →
+          </a>
         </div>
 
         {/* Mode tabs */}
