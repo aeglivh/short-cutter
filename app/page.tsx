@@ -113,6 +113,12 @@ export default function Home() {
           </p>
           <div className="flex justify-center gap-4 mt-2">
             <a
+              href="/editor"
+              className="text-sm text-zinc-500 hover:text-orange-400 transition-colors"
+            >
+              Clip Cutter
+            </a>
+            <a
               href="/transcript"
               className="text-sm text-zinc-500 hover:text-orange-400 transition-colors"
             >
