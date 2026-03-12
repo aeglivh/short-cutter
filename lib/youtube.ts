@@ -1,4 +1,9 @@
+import { Supadata } from "@supadata/js";
 import { TranscriptSegment } from "./types";
+
+const supadata = new Supadata({
+  apiKey: process.env.SUPADATA_API_KEY || "",
+});
 
 export function extractVideoId(url: string): string | null {
   const patterns = [
@@ -15,135 +20,25 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
-async function getCaptionTrack(
-  videoId: string
-): Promise<{ baseUrl: string; lang: string } | null> {
-  const response = await fetch(
-    `https://www.youtube.com/watch?v=${videoId}`,
-    {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        Cookie: "CONSENT=PENDING+987",
-      },
-    }
-  );
-
-  const html = await response.text();
-
-  const captionsMatch = html.match(
-    new RegExp('"captions"\\s*:\\s*(\\{.*?\\}),\\s*"videoDetails', "s")
-  );
-  if (!captionsMatch) return null;
-
-  let captions;
-  try {
-    captions = JSON.parse(captionsMatch[1]);
-  } catch {
-    return null;
-  }
-
-  const tracks =
-    captions?.playerCaptionsTracklistRenderer?.captionTracks;
-  if (!tracks || tracks.length === 0) return null;
-
-  const english = tracks.find(
-    (t: { languageCode: string }) => t.languageCode === "en"
-  );
-  const track = english || tracks[0];
-
-  return track?.baseUrl
-    ? { baseUrl: track.baseUrl, lang: track.languageCode }
-    : null;
-}
-
-function parseTimedText(xml: string): TranscriptSegment[] {
-  const segments: TranscriptSegment[] = [];
-  const regex =
-    /<text start="([^"]*)" dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
-  let match;
-
-  while ((match = regex.exec(xml)) !== null) {
-    const start = parseFloat(match[1]);
-    const dur = parseFloat(match[2]);
-    const text = match[3]
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/<[^>]+>/g, "")
-      .trim();
-
-    if (text) {
-      segments.push({
-        text,
-        offset: Math.floor(start),
-        duration: Math.floor(dur),
-      });
-    }
-  }
-
-  return segments;
-}
-
-function parseJson3(json: string): TranscriptSegment[] {
-  const data = JSON.parse(json);
-  const events = data?.events;
-  if (!Array.isArray(events)) return [];
-
-  const segments: TranscriptSegment[] = [];
-  for (const event of events) {
-    if (!event.segs || event.tStartMs === undefined) continue;
-    const text = event.segs
-      .map((s: { utf8: string }) => s.utf8)
-      .join("")
-      .trim();
-    if (!text || text === "\n") continue;
-
-    segments.push({
-      text,
-      offset: Math.floor(event.tStartMs / 1000),
-      duration: Math.floor((event.dDurationMs || 0) / 1000),
-    });
-  }
-
-  return segments;
-}
-
 export async function fetchTranscript(
   videoId: string
 ): Promise<TranscriptSegment[]> {
-  const track = await getCaptionTrack(videoId);
-  if (!track) return [];
+  const result = await supadata.youtube.transcript({
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    lang: "en",
+  });
 
-  const headers = {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    Cookie: "CONSENT=PENDING+987",
-  };
-
-  // Try json3 format first, then XML
-  for (const fmt of ["json3", "srv3", ""]) {
-    const url = fmt ? `${track.baseUrl}&fmt=${fmt}` : track.baseUrl;
-    const response = await fetch(url, { headers });
-    const body = await response.text();
-    if (!body || body.length < 10) continue;
-
-    if (fmt === "json3") {
-      try {
-        return parseJson3(body);
-      } catch {
-        continue;
-      }
-    } else {
-      const segments = parseTimedText(body);
-      if (segments.length > 0) return segments;
-    }
+  if (!result.content || typeof result.content === "string" || result.content.length === 0) {
+    return [];
   }
 
-  return [];
+  return result.content.map(
+    (item: { text: string; offset: number; duration: number }) => ({
+      text: item.text,
+      offset: Math.floor(item.offset / 1000),
+      duration: Math.floor(item.duration / 1000),
+    })
+  );
 }
 
 export function parseManualTranscript(text: string): TranscriptSegment[] {
