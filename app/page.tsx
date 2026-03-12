@@ -5,7 +5,7 @@ import UrlInput from "@/components/url-input";
 import ResultsCard from "@/components/results-card";
 import TranscriptViewer from "@/components/transcript-viewer";
 import { ShortSuggestion, TranscriptSegment } from "@/lib/types";
-import { saveResult, loadResult } from "@/lib/storage";
+import { saveResult, loadResult, saveEditorClips } from "@/lib/storage";
 
 type InputMode = "url" | "paste";
 
@@ -270,10 +270,24 @@ export default function Home() {
         {/* Results */}
         {shorts.length > 0 && (
           <div className="mt-12 space-y-6">
-            <h2 className="text-xl font-semibold text-zinc-300">
-              Found {shorts.length} Short{shorts.length !== 1 ? "s" : ""} to
-              cut
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-zinc-300">
+                Found {shorts.length} Short{shorts.length !== 1 ? "s" : ""} to
+                cut
+              </h2>
+              <button
+                onClick={() => {
+                  saveEditorClips(shorts);
+                  window.location.href = "/editor";
+                }}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-2"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                Cut clips in editor
+              </button>
+            </div>
             {shorts.map((short, i) => (
               <ResultsCard
                 key={i}

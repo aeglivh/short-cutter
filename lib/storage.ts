@@ -73,3 +73,25 @@ export function clearResult(videoId: string) {
   delete data.results[videoId];
   setStorage(data);
 }
+
+// Editor clip queue — pass shorts to the clip cutter
+const EDITOR_CLIPS_KEY = "short-cutter-editor-clips";
+
+export function saveEditorClips(shorts: ShortSuggestion[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(EDITOR_CLIPS_KEY, JSON.stringify(shorts));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadEditorClips(): ShortSuggestion[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(EDITOR_CLIPS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}

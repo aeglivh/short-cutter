@@ -3,6 +3,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
+import { ShortSuggestion } from "@/lib/types";
+import { loadEditorClips } from "@/lib/storage";
+import { saveVideo, loadVideo, clearVideo } from "@/lib/video-store";
 
 type ExportFormat = "mp4" | "webm";
 
@@ -22,6 +25,21 @@ function parseTime(str: string): number {
   return parseFloat(str) || 0;
 }
 
+function shortTimeToSeconds(time: string): number {
+  const parts = time.split(":").map(Number);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  return 0;
+}
+
+const CLIP_COLORS = [
+  { bg: "bg-blue-500/20", border: "border-blue-500/50", text: "text-blue-400", solid: "bg-blue-500" },
+  { bg: "bg-emerald-500/20", border: "border-emerald-500/50", text: "text-emerald-400", solid: "bg-emerald-500" },
+  { bg: "bg-violet-500/20", border: "border-violet-500/50", text: "text-violet-400", solid: "bg-violet-500" },
+  { bg: "bg-pink-500/20", border: "border-pink-500/50", text: "text-pink-400", solid: "bg-pink-500" },
+  { bg: "bg-amber-500/20", border: "border-amber-500/50", text: "text-amber-400", solid: "bg-amber-500" },
+];
+
 export default function EditorPage() {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState<string>("");
@@ -39,12 +57,14 @@ export default function EditorPage() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("mp4");
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [clips, setClips] = useState<ShortSuggestion[]>([]);
+  const [activeClip, setActiveClip] = useState<number | null>(null);
+  const [restoringVideo, setRestoringVideo] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef<"start" | "end" | "playhead" | null>(null);
-  const animFrameRef = useRef<number>(0);
 
   // Load ffmpeg
   const loadFFmpeg = useCallback(async () => {
@@ -70,6 +90,25 @@ export default function EditorPage() {
     }
   }, []);
 
+  // Restore video from IndexedDB + load clips from localStorage on mount
+  useEffect(() => {
+    const restore = async () => {
+      const stored = await loadVideo();
+      if (stored) {
+        setVideoFile(stored);
+        setVideoUrl(URL.createObjectURL(stored));
+        loadFFmpeg();
+      }
+      setRestoringVideo(false);
+    };
+    restore();
+
+    const savedClips = loadEditorClips();
+    if (savedClips.length > 0) {
+      setClips(savedClips);
+    }
+  }, [loadFFmpeg]);
+
   // Clean up video URL on unmount
   useEffect(() => {
     return () => {
@@ -84,7 +123,6 @@ export default function EditorPage() {
 
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
-      // Stop at end trim point
       if (video.currentTime >= endTime && endTime > 0) {
         video.pause();
         setPlaying(false);
@@ -94,8 +132,11 @@ export default function EditorPage() {
     const onPause = () => setPlaying(false);
     const onLoadedMetadata = () => {
       setDuration(video.duration);
-      setEndTime(video.duration);
-      setEndInput(formatTime(video.duration));
+      // Only set end to full duration if no clip is active
+      if (endTime === 0) {
+        setEndTime(video.duration);
+        setEndInput(formatTime(video.duration));
+      }
     };
 
     video.addEventListener("timeupdate", onTimeUpdate);
@@ -111,7 +152,7 @@ export default function EditorPage() {
     };
   }, [endTime]);
 
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = async (file: File) => {
     if (!file.type.startsWith("video/")) {
       setError("Please select a video file.");
       return;
@@ -124,8 +165,10 @@ export default function EditorPage() {
     setStartInput("0:00.0");
     setEndInput("0:00.0");
     setCurrentTime(0);
+    setActiveClip(null);
     setError(null);
     loadFFmpeg();
+    await saveVideo(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -138,6 +181,19 @@ export default function EditorPage() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) handleFileSelect(file);
+  };
+
+  const handleClearFile = async () => {
+    setVideoFile(null);
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setVideoUrl("");
+    setDuration(0);
+    setStartTime(0);
+    setEndTime(0);
+    setStartInput("0:00.0");
+    setEndInput("0:00.0");
+    setActiveClip(null);
+    await clearVideo();
   };
 
   const togglePlay = () => {
@@ -164,12 +220,14 @@ export default function EditorPage() {
     const t = videoRef.current?.currentTime ?? 0;
     setStartTime(t);
     setStartInput(formatTime(t));
+    setActiveClip(null);
   };
 
   const setEnd = () => {
     const t = videoRef.current?.currentTime ?? 0;
     setEndTime(t);
     setEndInput(formatTime(t));
+    setActiveClip(null);
   };
 
   const handleStartInputBlur = () => {
@@ -177,12 +235,27 @@ export default function EditorPage() {
     setStartTime(t);
     setStartInput(formatTime(t));
     seekTo(t);
+    setActiveClip(null);
   };
 
   const handleEndInputBlur = () => {
     const t = Math.max(startTime + 0.1, Math.min(parseTime(endInput), duration));
     setEndTime(t);
     setEndInput(formatTime(t));
+    setActiveClip(null);
+  };
+
+  // Select a clip from the shorts list
+  const selectClip = (index: number) => {
+    const clip = clips[index];
+    const s = shortTimeToSeconds(clip.startTime);
+    const e = shortTimeToSeconds(clip.endTime);
+    setStartTime(s);
+    setEndTime(e);
+    setStartInput(formatTime(s));
+    setEndInput(formatTime(e));
+    setActiveClip(index);
+    seekTo(s);
   };
 
   // Timeline drag handling
@@ -203,10 +276,12 @@ export default function EditorPage() {
         const clamped = Math.max(0, Math.min(t, endTime - 0.1));
         setStartTime(clamped);
         setStartInput(formatTime(clamped));
+        setActiveClip(null);
       } else if (draggingRef.current === "end") {
         const clamped = Math.max(startTime + 0.1, Math.min(t, duration));
         setEndTime(clamped);
         setEndInput(formatTime(clamped));
+        setActiveClip(null);
       } else if (draggingRef.current === "playhead") {
         seekTo(t);
       }
@@ -227,7 +302,6 @@ export default function EditorPage() {
     seekTo(getTimeFromMouse(e));
   };
 
-  // Preview trim (play from start to end)
   const previewTrim = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -249,11 +323,11 @@ export default function EditorPage() {
 
       await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
 
-      const clipDuration = endTime - startTime;
+      const clipDur = endTime - startTime;
       const args = [
         "-ss", startTime.toFixed(3),
         "-i", inputName,
-        "-t", clipDuration.toFixed(3),
+        "-t", clipDur.toFixed(3),
         "-c", "copy",
         "-avoid_negative_ts", "make_zero",
         outputName,
@@ -267,11 +341,11 @@ export default function EditorPage() {
 
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}_clip_${formatTime(startTime).replace(":", "m").replace(".", "s")}-${formatTime(endTime).replace(":", "m").replace(".", "s")}.${exportFormat}`;
+      const clipLabel = activeClip !== null ? `_short${activeClip + 1}` : `_clip_${formatTime(startTime).replace(":", "m").replace(".", "s")}-${formatTime(endTime).replace(":", "m").replace(".", "s")}`;
+      a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}${clipLabel}.${exportFormat}`;
       a.click();
       URL.revokeObjectURL(url);
 
-      // Clean up ffmpeg files
       await ffmpeg.deleteFile(inputName);
       await ffmpeg.deleteFile(outputName);
     } catch {
@@ -286,6 +360,21 @@ export default function EditorPage() {
   const startPct = duration ? (startTime / duration) * 100 : 0;
   const endPct = duration ? (endTime / duration) * 100 : 100;
   const playheadPct = duration ? (currentTime / duration) * 100 : 0;
+
+  // Show loading state while restoring
+  if (restoringVideo) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
+        <div className="flex items-center gap-3 text-zinc-400">
+          <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          Loading...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
@@ -349,16 +438,7 @@ export default function EditorPage() {
                 </span>
               </div>
               <button
-                onClick={() => {
-                  setVideoFile(null);
-                  if (videoUrl) URL.revokeObjectURL(videoUrl);
-                  setVideoUrl("");
-                  setDuration(0);
-                  setStartTime(0);
-                  setEndTime(0);
-                  setStartInput("0:00.0");
-                  setEndInput("0:00.0");
-                }}
+                onClick={handleClearFile}
                 className="text-sm text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer"
               >
                 Change file
@@ -405,18 +485,41 @@ export default function EditorPage() {
             <div className="space-y-2">
               <div
                 ref={timelineRef}
-                className="relative h-12 bg-zinc-900 rounded-lg cursor-pointer select-none"
+                className="relative h-14 bg-zinc-900 rounded-lg cursor-pointer select-none"
                 onClick={handleTimelineClick}
               >
+                {/* Short clip markers (behind the active selection) */}
+                {duration > 0 && clips.map((clip, i) => {
+                  const cs = shortTimeToSeconds(clip.startTime);
+                  const ce = shortTimeToSeconds(clip.endTime);
+                  const leftPct = (cs / duration) * 100;
+                  const widthPct = ((ce - cs) / duration) * 100;
+                  const color = CLIP_COLORS[i % CLIP_COLORS.length];
+                  const isActive = activeClip === i;
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute bottom-0 h-3 rounded-b cursor-pointer transition-all ${color.bg} border-t-2 ${color.border} ${isActive ? "opacity-100" : "opacity-60 hover:opacity-90"}`}
+                      style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                      onClick={(e) => { e.stopPropagation(); selectClip(i); }}
+                      title={`Short ${i + 1}: ${clip.title}`}
+                    >
+                      <span className={`absolute -top-5 left-1 text-[9px] font-bold ${color.text} whitespace-nowrap pointer-events-none`}>
+                        {i + 1}
+                      </span>
+                    </div>
+                  );
+                })}
+
                 {/* Selected region */}
                 <div
-                  className="absolute top-0 bottom-0 bg-orange-500/20 border-y border-orange-500/40"
+                  className="absolute top-0 bottom-3 bg-orange-500/20 border-y border-orange-500/40"
                   style={{ left: `${startPct}%`, width: `${endPct - startPct}%` }}
                 />
 
                 {/* Start handle */}
                 <div
-                  className="absolute top-0 bottom-0 w-1.5 bg-orange-500 cursor-ew-resize z-10 hover:bg-orange-400 rounded-l"
+                  className="absolute top-0 bottom-3 w-1.5 bg-orange-500 cursor-ew-resize z-10 hover:bg-orange-400 rounded-l"
                   style={{ left: `${startPct}%` }}
                   onMouseDown={(e) => handleTimelineMouseDown(e, "start")}
                 >
@@ -430,7 +533,7 @@ export default function EditorPage() {
 
                 {/* End handle */}
                 <div
-                  className="absolute top-0 bottom-0 w-1.5 bg-orange-500 cursor-ew-resize z-10 hover:bg-orange-400 rounded-r"
+                  className="absolute top-0 bottom-3 w-1.5 bg-orange-500 cursor-ew-resize z-10 hover:bg-orange-400 rounded-r"
                   style={{ left: `${endPct}%`, transform: "translateX(-100%)" }}
                   onMouseDown={(e) => handleTimelineMouseDown(e, "end")}
                 >
@@ -452,6 +555,53 @@ export default function EditorPage() {
                 </div>
               </div>
             </div>
+
+            {/* Clips panel */}
+            {clips.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-zinc-400">Suggested Shorts</h3>
+                  <button
+                    onClick={() => { setClips([]); setActiveClip(null); }}
+                    className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="grid gap-2">
+                  {clips.map((clip, i) => {
+                    const color = CLIP_COLORS[i % CLIP_COLORS.length];
+                    const isActive = activeClip === i;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => selectClip(i)}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all cursor-pointer ${
+                          isActive
+                            ? "bg-zinc-800 border border-zinc-600"
+                            : "bg-zinc-900 border border-zinc-800 hover:border-zinc-700"
+                        }`}
+                      >
+                        <span className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold text-white ${color.solid}`}>
+                          {i + 1}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-white truncate">{clip.title}</p>
+                          <p className="text-xs text-zinc-500 font-mono">
+                            {clip.startTime} — {clip.endTime}
+                          </p>
+                        </div>
+                        {isActive && (
+                          <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">
+                            Selected
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Trim controls */}
             <div className="flex items-end gap-4 flex-wrap">
