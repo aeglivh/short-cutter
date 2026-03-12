@@ -241,7 +241,7 @@ export default function TranscriptPage() {
 
         {/* Footer */}
         <div className="mt-20 text-center text-xs text-zinc-600">
-          Built for Studio Egli — powered by Claude
+          Powered by Claude AI
         </div>
       </div>
     </div>

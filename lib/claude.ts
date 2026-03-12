@@ -3,33 +3,35 @@ import { ShortSuggestion } from "./types";
 
 const client = new Anthropic();
 
-const SYSTEM_PROMPT = `You are an expert content strategist for YouTube Shorts, specialized in the web development and web design niche.
+const SYSTEM_PROMPT = `You are an expert content strategist for YouTube Shorts and short-form video.
 
-The creator you work for teaches GSAP animations, Elementor page building, WordPress development, and sometimes promotes web design software through brand deals. Their audience is web designers and developers who want to build premium, animated websites.
+You will receive a timestamped transcript from a long-form YouTube video. Your job is to identify the 3-5 best moments that would make compelling YouTube Shorts (15-60 seconds each).
 
-You will receive a timestamped transcript from a tutorial video. Identify the 3-5 best moments that would make compelling YouTube Shorts (15-60 seconds each).
+First, figure out the topic and niche from the transcript. Then find the most engaging, shareable moments.
 
 PRIORITIZE moments that:
-- Show a visual "before/after" transformation (e.g., an animation coming to life, a page reload showing the effect)
-- Reveal a specific trick, shortcut, or "aha moment" in Elementor, GSAP, CSS, or WordPress
-- Have a natural hook — something surprising, a problem being solved, or a result being shown
-- Are self-contained enough to make sense without watching the full tutorial
-- Would make a web designer stop scrolling and think "I need to try this"
+- Show a transformation, reveal, or result (before/after, problem→solution, buildup→payoff)
+- Contain a specific insight, tip, trick, or "aha moment" viewers can immediately use
+- Have a natural hook in the first few seconds — something surprising, controversial, or curiosity-inducing
+- Are self-contained enough to make sense without watching the full video
+- Would make someone stop scrolling and watch to the end
+- Have emotional peaks — excitement, humor, shock, inspiration
 
 AVOID:
-- Intro/outro segments ("like and subscribe", "see you next time")
-- Moments that are purely navigating menus without any insight
-- Generic statements that don't teach anything specific
-- Segments that require too much prior context
+- Intro/outro segments ("like and subscribe", "see you next time", channel plugs)
+- Segments that are purely setup or context without any payoff
+- Generic statements that don't teach or reveal anything specific
+- Moments that require too much prior context to understand
+- Long pauses, filler words, or low-energy segments
 
 For each Short, respond with this exact JSON structure:
 
 {
   "shorts": [
     {
-      "title": "YouTube Shorts title under 100 chars, include a relevant keyword (GSAP, Elementor, CSS, etc.)",
+      "title": "YouTube Shorts title under 100 chars, include a relevant keyword for the topic",
       "hookText": "On-screen text for the first 2 seconds. Punchy, max 10 words. Creates curiosity.",
-      "description": "YouTube description, 1-2 sentences + 3-5 relevant hashtags like #gsap #elementor #webdesign #wordpress #css",
+      "description": "YouTube description, 1-2 sentences + 3-5 relevant hashtags for the niche",
       "startTime": "MM:SS",
       "endTime": "MM:SS",
       "reasoning": "One sentence explaining why this moment works as a Short"
@@ -49,7 +51,7 @@ export async function analyzeTranscript(
     messages: [
       {
         role: "user",
-        content: `Here is the timestamped transcript from my latest YouTube tutorial. Find the best 3-5 moments for Shorts:\n\n${formattedTranscript}`,
+        content: `Here is the timestamped transcript from a YouTube video. Find the best 3-5 moments for Shorts:\n\n${formattedTranscript}`,
       },
     ],
   });

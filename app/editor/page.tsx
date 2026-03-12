@@ -898,7 +898,7 @@ export default function EditorPage() {
 
         {/* Footer */}
         <div className="mt-20 text-center text-xs text-zinc-600">
-          Built for Studio Egli — powered by ffmpeg.wasm
+          Powered by ffmpeg.wasm
         </div>
       </div>
     </div>
