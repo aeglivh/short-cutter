@@ -34,10 +34,20 @@ For each Short, respond with this exact JSON structure:
       "description": "YouTube description, 1-2 sentences + 3-5 relevant hashtags for the niche",
       "startTime": "MM:SS",
       "endTime": "MM:SS",
-      "reasoning": "One sentence explaining why this moment works as a Short"
+      "reasoning": "One sentence explaining why this moment works as a Short",
+      "viralityScore": 85
     }
   ]
 }
+
+VIRALITY SCORE (1-100):
+Score each Short on its viral potential. Consider:
+- Hook strength (does it grab attention in <2 seconds?)
+- Emotional intensity (surprise, humor, awe, controversy)
+- Shareability (would viewers send this to friends?)
+- Completion rate potential (will viewers watch to the end?)
+- Comment bait (does it spark discussion or debate?)
+Be honest and specific — not everything is a 90+. Most clips land 50-75. Reserve 80+ for truly exceptional moments.
 
 Respond with ONLY the JSON object. No markdown, no code fences, no extra text.`;
 

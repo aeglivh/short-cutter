@@ -277,7 +277,7 @@ export default function Home() {
               </h2>
               <button
                 onClick={() => {
-                  saveEditorClips(shorts, url || undefined);
+                  saveEditorClips(shorts, url || undefined, transcript);
                   window.location.href = "/editor";
                 }}
                 className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-2"

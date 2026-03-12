@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
-import { ShortSuggestion } from "@/lib/types";
+import { ShortSuggestion, TranscriptSegment } from "@/lib/types";
 import { loadEditorClipData } from "@/lib/storage";
 import { saveVideo, loadVideo, clearVideo } from "@/lib/video-store";
 
@@ -39,6 +39,26 @@ function getExtension(filename: string): string {
   return ".mp4";
 }
 
+function generateSrt(segments: TranscriptSegment[], clipStart: number, clipEnd: number): string {
+  const relevant = segments.filter(s => {
+    const segEnd = s.offset + s.duration;
+    return s.offset < clipEnd && segEnd > clipStart;
+  });
+
+  return relevant.map((seg, i) => {
+    const relStart = Math.max(0, seg.offset - clipStart);
+    const relEnd = Math.min(clipEnd - clipStart, seg.offset + seg.duration - clipStart);
+    const fmtSrt = (t: number) => {
+      const h = Math.floor(t / 3600);
+      const m = Math.floor((t % 3600) / 60);
+      const s = Math.floor(t % 60);
+      const ms = Math.floor((t % 1) * 1000);
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+    };
+    return `${i + 1}\n${fmtSrt(relStart)} --> ${fmtSrt(relEnd)}\n${seg.text.trim()}\n`;
+  }).join("\n");
+}
+
 const CLIP_COLORS = [
   { bg: "bg-blue-500/20", border: "border-blue-500/50", text: "text-blue-400", solid: "bg-blue-500" },
   { bg: "bg-emerald-500/20", border: "border-emerald-500/50", text: "text-emerald-400", solid: "bg-emerald-500" },
@@ -61,6 +81,8 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [batchExporting, setBatchExporting] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [exportFormat, setExportFormat] = useState<ExportFormat>("mp4");
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +94,8 @@ export default function EditorPage() {
   const [cropPosition, setCropPosition] = useState(50);
   const [videoWidth, setVideoWidth] = useState(0);
   const [videoHeight, setVideoHeight] = useState(0);
+  const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[]>([]);
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
@@ -132,6 +156,9 @@ export default function EditorPage() {
     if (clipData.shorts.length > 0) {
       setClips(clipData.shorts);
       setSourceUrl(clipData.sourceUrl);
+      if (clipData.transcript && clipData.transcript.length > 0) {
+        setTranscriptSegments(clipData.transcript);
+      }
     }
   }, [loadFFmpeg]);
 
@@ -405,13 +432,29 @@ export default function EditorPage() {
         "-t", clipDur.toFixed(3),
       ];
 
+      const needsReencode = aspectRatio === "9:16" || (captionsEnabled && transcriptSegments.length > 0);
+      const filters: string[] = [];
+
       if (aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0) {
         const targetW = Math.round(videoHeight * 9 / 16);
         const cropW = Math.min(targetW, videoWidth);
         const maxX = videoWidth - cropW;
         const cropX = Math.round(maxX * (cropPosition / 100));
-        // Use crop filter and re-encode
-        args.push("-vf", `crop=${cropW}:${videoHeight}:${cropX}:0`);
+        filters.push(`crop=${cropW}:${videoHeight}:${cropX}:0`);
+      }
+
+      if (captionsEnabled && transcriptSegments.length > 0) {
+        const srt = generateSrt(transcriptSegments, startTime, endTime);
+        await ffmpeg.writeFile("subs.srt", new TextEncoder().encode(srt));
+        // Use subtitles filter with styling
+        const subStyle = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1";
+        filters.push(`subtitles=subs.srt:force_style='${subStyle}'`);
+      }
+
+      if (needsReencode) {
+        if (filters.length > 0) {
+          args.push("-vf", filters.join(","));
+        }
         args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23");
         args.push("-c:a", "aac", "-b:a", "128k");
       } else {
@@ -446,11 +489,103 @@ export default function EditorPage() {
 
       await ffmpeg.deleteFile(inputName);
       await ffmpeg.deleteFile(outputName);
+      try { await ffmpeg.deleteFile("subs.srt"); } catch { /* may not exist */ }
     } catch (e) {
       console.error("Export error:", e);
       setError(`Export failed: ${e instanceof Error ? e.message : "Unknown error"}. Check browser console for details.`);
     } finally {
       setExporting(false);
+      setExportProgress(0);
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (!ffmpegRef.current || !videoFile || clips.length === 0) return;
+    setBatchExporting(true);
+    setBatchProgress({ current: 0, total: clips.length });
+    setError(null);
+
+    try {
+      const ffmpeg = ffmpegRef.current;
+      const inputName = "input" + getExtension(videoFile.name);
+      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i];
+        setBatchProgress({ current: i + 1, total: clips.length });
+        setExportProgress(0);
+
+        const clipStart = shortTimeToSeconds(clip.startTime);
+        const clipEnd = shortTimeToSeconds(clip.endTime);
+        const clipDur = clipEnd - clipStart;
+        if (clipDur <= 0) continue;
+
+        const outputName = `batch_clip_${i}.${exportFormat}`;
+        const args: string[] = [
+          "-ss", clipStart.toFixed(3),
+          "-i", inputName,
+          "-t", clipDur.toFixed(3),
+        ];
+
+        const batchNeedsReencode = aspectRatio === "9:16" || (captionsEnabled && transcriptSegments.length > 0);
+        const batchFilters: string[] = [];
+
+        if (aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0) {
+          const targetW = Math.round(videoHeight * 9 / 16);
+          const cropW = Math.min(targetW, videoWidth);
+          const maxX = videoWidth - cropW;
+          const cropX = Math.round(maxX * (cropPosition / 100));
+          batchFilters.push(`crop=${cropW}:${videoHeight}:${cropX}:0`);
+        }
+
+        if (captionsEnabled && transcriptSegments.length > 0) {
+          const srt = generateSrt(transcriptSegments, clipStart, clipEnd);
+          await ffmpeg.writeFile("subs.srt", new TextEncoder().encode(srt));
+          const subStyle = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1";
+          batchFilters.push(`subtitles=subs.srt:force_style='${subStyle}'`);
+        }
+
+        if (batchNeedsReencode) {
+          if (batchFilters.length > 0) {
+            args.push("-vf", batchFilters.join(","));
+          }
+          args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23");
+          args.push("-c:a", "aac", "-b:a", "128k");
+        } else {
+          args.push("-c", "copy");
+        }
+
+        args.push("-avoid_negative_ts", "make_zero", outputName);
+        const exitCode = await ffmpeg.exec(args);
+        if (exitCode !== 0) {
+          console.error(`[ffmpeg] Batch clip ${i + 1} failed with code ${exitCode}`);
+          try { await ffmpeg.deleteFile("subs.srt"); } catch { /* ignore */ }
+          continue;
+        }
+
+        const data = await ffmpeg.readFile(outputName);
+        const blob = new Blob([new Uint8Array(data as Uint8Array)], {
+          type: exportFormat === "mp4" ? "video/mp4" : "video/webm",
+        });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        const ratioLabel = aspectRatio === "9:16" ? "_9x16" : "";
+        a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}_short${i + 1}${ratioLabel}.${exportFormat}`;
+        a.click();
+        URL.revokeObjectURL(url);
+        await ffmpeg.deleteFile(outputName);
+        try { await ffmpeg.deleteFile("subs.srt"); } catch { /* ignore */ }
+      }
+
+      await ffmpeg.deleteFile(inputName);
+    } catch (e) {
+      console.error("Batch export error:", e);
+      setError(`Batch export failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setBatchExporting(false);
+      setBatchProgress({ current: 0, total: 0 });
       setExportProgress(0);
     }
   };
@@ -568,6 +703,23 @@ export default function EditorPage() {
               </div>
               {cropOverlay && (
                 <span className="text-xs text-zinc-600 ml-2">Drag the crop overlay on the video to adjust</span>
+              )}
+
+              {transcriptSegments.length > 0 && (
+                <div className="flex items-center gap-2 ml-4 border-l border-zinc-800 pl-4">
+                  <button
+                    onClick={() => setCaptionsEnabled(!captionsEnabled)}
+                    className={`px-3 py-1.5 text-sm rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+                      captionsEnabled ? "bg-orange-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="2" y="4" width="20" height="16" rx="2" />
+                      <path d="M7 15h4M13 15h4M7 11h2M11 11h6" />
+                    </svg>
+                    Captions
+                  </button>
+                </div>
               )}
             </div>
 
@@ -764,7 +916,17 @@ export default function EditorPage() {
                         </span>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm text-white truncate">{clip.title}</p>
-                          <p className="text-xs text-zinc-500 font-mono">{clip.startTime} — {clip.endTime}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-zinc-500 font-mono">{clip.startTime} — {clip.endTime}</p>
+                            {clip.viralityScore != null && (
+                              <span className={`text-[10px] font-mono font-bold ${
+                                clip.viralityScore >= 80 ? "text-emerald-400" :
+                                clip.viralityScore >= 60 ? "text-orange-400" : "text-zinc-500"
+                              }`}>
+                                {clip.viralityScore}%
+                              </span>
+                            )}
+                          </div>
                         </div>
                         {isActive && (
                           <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">Selected</span>
@@ -872,11 +1034,43 @@ export default function EditorPage() {
                     </>
                   )}
                 </button>
+
+                {clips.length > 0 && (
+                  <button
+                    onClick={handleBatchExport}
+                    disabled={!loaded || exporting || batchExporting}
+                    className="px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-2 text-sm"
+                  >
+                    {batchExporting ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Exporting {batchProgress.current}/{batchProgress.total}...
+                      </>
+                    ) : (
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                        </svg>
+                        Export all {clips.length} clips
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {exporting && (
-                <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                  <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${exportProgress}%` }} />
+              {(exporting || batchExporting) && (
+                <div className="space-y-1">
+                  <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                    <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${exportProgress}%` }} />
+                  </div>
+                  {batchExporting && (
+                    <p className="text-xs text-zinc-500 text-center">
+                      Clip {batchProgress.current} of {batchProgress.total}
+                    </p>
+                  )}
                 </div>
               )}
 

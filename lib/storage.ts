@@ -80,12 +80,13 @@ const EDITOR_CLIPS_KEY = "short-cutter-editor-clips";
 export interface EditorClipData {
   shorts: ShortSuggestion[];
   sourceUrl?: string;
+  transcript?: TranscriptSegment[];
 }
 
-export function saveEditorClips(shorts: ShortSuggestion[], sourceUrl?: string) {
+export function saveEditorClips(shorts: ShortSuggestion[], sourceUrl?: string, transcript?: TranscriptSegment[]) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(EDITOR_CLIPS_KEY, JSON.stringify({ shorts, sourceUrl }));
+    localStorage.setItem(EDITOR_CLIPS_KEY, JSON.stringify({ shorts, sourceUrl, transcript }));
   } catch {
     // ignore
   }

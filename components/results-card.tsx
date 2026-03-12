@@ -61,7 +61,28 @@ export default function ResultsCard({
             {short.startTime} - {short.endTime}
           </a>
         </div>
-        <CopyButton text={allText} label="Copy all" />
+        <div className="flex items-center gap-2">
+          {short.viralityScore != null && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${
+                    short.viralityScore >= 80 ? "bg-emerald-500" :
+                    short.viralityScore >= 60 ? "bg-orange-500" : "bg-zinc-500"
+                  }`}
+                  style={{ width: `${short.viralityScore}%` }}
+                />
+              </div>
+              <span className={`text-xs font-mono font-bold ${
+                short.viralityScore >= 80 ? "text-emerald-400" :
+                short.viralityScore >= 60 ? "text-orange-400" : "text-zinc-400"
+              }`}>
+                {short.viralityScore}
+              </span>
+            </div>
+          )}
+          <CopyButton text={allText} label="Copy all" />
+        </div>
       </div>
 
       <div>

@@ -11,6 +11,7 @@ export interface ShortSuggestion {
   startTime: string; // "MM:SS"
   endTime: string; // "MM:SS"
   reasoning: string;
+  viralityScore: number; // 1-100
 }
 
 export interface AnalyzeResponse {
