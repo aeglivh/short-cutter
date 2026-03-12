@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
 import { ShortSuggestion } from "@/lib/types";
-import { loadEditorClips } from "@/lib/storage";
+import { loadEditorClipData } from "@/lib/storage";
 import { saveVideo, loadVideo, clearVideo } from "@/lib/video-store";
 
 type ExportFormat = "mp4" | "webm";
@@ -60,6 +60,7 @@ export default function EditorPage() {
   const [clips, setClips] = useState<ShortSuggestion[]>([]);
   const [activeClip, setActiveClip] = useState<number | null>(null);
   const [restoringVideo, setRestoringVideo] = useState(true);
+  const [sourceUrl, setSourceUrl] = useState<string | undefined>();
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const ffmpegRef = useRef<FFmpeg | null>(null);
@@ -103,9 +104,10 @@ export default function EditorPage() {
     };
     restore();
 
-    const savedClips = loadEditorClips();
-    if (savedClips.length > 0) {
-      setClips(savedClips);
+    const clipData = loadEditorClipData();
+    if (clipData.shorts.length > 0) {
+      setClips(clipData.shorts);
+      setSourceUrl(clipData.sourceUrl);
     }
   }, [loadFFmpeg]);
 
@@ -402,27 +404,44 @@ export default function EditorPage() {
 
         {/* Upload area */}
         {!videoFile && (
-          <div
-            onDrop={handleDrop}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            className={`border-2 border-dashed rounded-xl p-16 text-center transition-colors cursor-pointer ${
-              dragOver ? "border-orange-500 bg-orange-500/5" : "border-zinc-700 hover:border-zinc-500"
-            }`}
-            onClick={() => document.getElementById("file-input")?.click()}
-          >
-            <input
-              id="file-input"
-              type="file"
-              accept="video/*"
-              onChange={handleFileInput}
-              className="hidden"
-            />
-            <svg className="mx-auto mb-4 text-zinc-500" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
-            </svg>
-            <p className="text-zinc-400 text-lg mb-1">Drop a video file here</p>
-            <p className="text-zinc-600 text-sm">or click to browse — MP4, WebM, MOV supported</p>
+          <div className="space-y-4">
+            {clips.length > 0 && (
+              <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-lg text-center space-y-2">
+                <p className="text-zinc-300 text-sm">
+                  <span className="text-orange-400 font-medium">{clips.length} Short{clips.length !== 1 ? "s" : ""}</span> ready to cut
+                </p>
+                {sourceUrl && (
+                  <p className="text-zinc-500 text-xs">
+                    From: <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-orange-400 underline transition-colors">{sourceUrl}</a>
+                  </p>
+                )}
+                <p className="text-zinc-500 text-xs">
+                  Drop the source video below to start cutting.
+                </p>
+              </div>
+            )}
+            <div
+              onDrop={handleDrop}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              className={`border-2 border-dashed rounded-xl p-16 text-center transition-colors cursor-pointer ${
+                dragOver ? "border-orange-500 bg-orange-500/5" : "border-zinc-700 hover:border-zinc-500"
+              }`}
+              onClick={() => document.getElementById("file-input")?.click()}
+            >
+              <input
+                id="file-input"
+                type="file"
+                accept="video/*"
+                onChange={handleFileInput}
+                className="hidden"
+              />
+              <svg className="mx-auto mb-4 text-zinc-500" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+              </svg>
+              <p className="text-zinc-400 text-lg mb-1">Drop a video file here</p>
+              <p className="text-zinc-600 text-sm">or click to browse — MP4, WebM, MOV supported</p>
+            </div>
           </div>
         )}
 
