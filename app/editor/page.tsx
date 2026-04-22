@@ -286,14 +286,12 @@ export default function EditorPage() {
     const t = videoRef.current?.currentTime ?? 0;
     setStartTime(t);
     setStartInput(formatTime(t));
-    setActiveClip(null);
   };
 
   const setEnd = () => {
     const t = videoRef.current?.currentTime ?? 0;
     setEndTime(t);
     setEndInput(formatTime(t));
-    setActiveClip(null);
   };
 
   const handleStartInputBlur = () => {
@@ -301,14 +299,12 @@ export default function EditorPage() {
     setStartTime(t);
     setStartInput(formatTime(t));
     seekTo(t);
-    setActiveClip(null);
   };
 
   const handleEndInputBlur = () => {
     const t = Math.max(startTimeRef.current + 0.1, Math.min(parseTime(endInput), durationRef.current));
     setEndTime(t);
     setEndInput(formatTime(t));
-    setActiveClip(null);
   };
 
   // Select a clip from the shorts list
@@ -347,13 +343,11 @@ export default function EditorPage() {
         setStartTime(clamped);
         startTimeRef.current = clamped;
         setStartInput(formatTime(clamped));
-        setActiveClip(null);
       } else if (draggingRef.current === "end") {
         const clamped = Math.max(startTimeRef.current + 0.1, Math.min(t, durationRef.current));
         setEndTime(clamped);
         endTimeRef.current = clamped;
         setEndInput(formatTime(clamped));
-        setActiveClip(null);
       } else if (draggingRef.current === "playhead") {
         seekTo(t);
       }
@@ -504,8 +498,9 @@ export default function EditorPage() {
     if (!ffmpegRef.current || !videoFile) return;
     const clip = clips[index];
     if (!clip) return;
-    const clipStart = shortTimeToSeconds(clip.startTime);
-    const clipEnd = shortTimeToSeconds(clip.endTime);
+    const useEditedRange = activeClip === index && endTime > startTime;
+    const clipStart = useEditedRange ? startTime : shortTimeToSeconds(clip.startTime);
+    const clipEnd = useEditedRange ? endTime : shortTimeToSeconds(clip.endTime);
     const clipDur = clipEnd - clipStart;
     if (clipDur <= 0) return;
 
@@ -1007,6 +1002,9 @@ export default function EditorPage() {
                     const isActive = activeClip === i;
                     const isExportingThis = exportingClipIndex === i;
                     const anyExporting = exporting || batchExporting || exportingClipIndex !== null;
+                    const origStart = shortTimeToSeconds(clip.startTime);
+                    const origEnd = shortTimeToSeconds(clip.endTime);
+                    const isEdited = isActive && (Math.abs(startTime - origStart) > 0.05 || Math.abs(endTime - origEnd) > 0.05);
                     return (
                       <div
                         key={i}
@@ -1033,7 +1031,9 @@ export default function EditorPage() {
                           </div>
                         </div>
                         {isActive && (
-                          <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">Selected</span>
+                          <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">
+                            {isEdited ? "Edited" : "Selected"}
+                          </span>
                         )}
                         <button
                           onClick={(e) => { e.stopPropagation(); handleExportClip(i); }}
