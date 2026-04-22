@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     }
 
     const formatted = formatTranscript(segments);
-    const shorts = await analyzeTranscript(formatted);
+    const shorts = await analyzeTranscript(formatted, segments);
 
     return NextResponse.json({
       shorts,
