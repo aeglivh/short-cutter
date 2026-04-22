@@ -841,6 +841,22 @@ export default function EditorPage() {
                   />
                 </>
               )}
+              {/* Live caption overlay */}
+              {captionsEnabled && transcriptSegments.length > 0 && (() => {
+                const active = transcriptSegments.find(
+                  s => currentTime >= s.offset && currentTime < s.offset + s.duration
+                );
+                if (!active) return null;
+                return (
+                  <div className="absolute left-0 right-0 bottom-8 flex justify-center pointer-events-none px-4">
+                    <span className="inline-block max-w-[90%] text-center text-white font-bold text-lg sm:text-xl leading-tight px-3 py-1 rounded"
+                      style={{ textShadow: "2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 0 2px 0 #000, 2px 0 0 #000, 0 -2px 0 #000, -2px 0 0 #000" }}
+                    >
+                      {active.text.trim()}
+                    </span>
+                  </div>
+                );
+              })()}
               {/* Progress bar on video */}
               {duration > 0 && (() => {
                 const hasClip = clipDuration > 0.1 && (startTime > 0 || endTime < duration);
