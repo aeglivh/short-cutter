@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getAllResults, clearResult, StoredResult } from "@/lib/storage";
+import { useRouter } from "next/navigation";
+import { getAllResults, clearResult, saveEditorClips, StoredResult } from "@/lib/storage";
 
 function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString("en-US", {
@@ -24,6 +25,7 @@ function Thumbnail({ videoId }: { videoId: string }) {
 }
 
 export default function HistoryPage() {
+  const router = useRouter();
   const [results, setResults] = useState<StoredResult[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -34,6 +36,11 @@ export default function HistoryPage() {
   const handleDelete = (videoId: string) => {
     clearResult(videoId);
     setResults(getAllResults());
+  };
+
+  const handleOpenInEditor = (result: StoredResult) => {
+    saveEditorClips(result.shorts, result.url, result.transcript);
+    router.push("/editor");
   };
 
   return (
@@ -83,13 +90,18 @@ export default function HistoryPage() {
             >
               {/* Video card header */}
               <div className="flex items-center gap-4 p-4">
-                <a
-                  href={result.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  onClick={() => handleOpenInEditor(result)}
+                  title="Open in editor"
+                  className="group relative cursor-pointer rounded-lg overflow-hidden shrink-0"
                 >
                   <Thumbnail videoId={result.videoId} />
-                </a>
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <span className="text-xs text-white font-medium bg-orange-600 px-2 py-1 rounded">
+                      Open in editor
+                    </span>
+                  </div>
+                </button>
                 <div className="flex-1 min-w-0">
                   <a
                     href={result.url}
@@ -113,6 +125,12 @@ export default function HistoryPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => handleOpenInEditor(result)}
+                    className="text-xs px-3 py-1.5 rounded bg-orange-600 hover:bg-orange-500 text-white transition-colors cursor-pointer"
+                  >
+                    Open in editor
+                  </button>
                   <button
                     onClick={() =>
                       setExpanded(
