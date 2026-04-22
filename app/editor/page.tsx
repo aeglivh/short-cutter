@@ -83,6 +83,7 @@ export default function EditorPage() {
   const [exportProgress, setExportProgress] = useState(0);
   const [batchExporting, setBatchExporting] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [exportingClipIndex, setExportingClipIndex] = useState<number | null>(null);
   const [exportFormat, setExportFormat] = useState<ExportFormat>("mp4");
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -499,6 +500,91 @@ export default function EditorPage() {
     }
   };
 
+  const handleExportClip = async (index: number) => {
+    if (!ffmpegRef.current || !videoFile) return;
+    const clip = clips[index];
+    if (!clip) return;
+    const clipStart = shortTimeToSeconds(clip.startTime);
+    const clipEnd = shortTimeToSeconds(clip.endTime);
+    const clipDur = clipEnd - clipStart;
+    if (clipDur <= 0) return;
+
+    setExportingClipIndex(index);
+    setExportProgress(0);
+    setError(null);
+
+    try {
+      const ffmpeg = ffmpegRef.current;
+      const inputName = "input" + getExtension(videoFile.name);
+      const outputName = `single_clip_${index}.${exportFormat}`;
+
+      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+
+      const args: string[] = [
+        "-ss", clipStart.toFixed(3),
+        "-i", inputName,
+        "-t", clipDur.toFixed(3),
+      ];
+
+      const needsReencode = aspectRatio === "9:16" || (captionsEnabled && transcriptSegments.length > 0);
+      const filters: string[] = [];
+
+      if (aspectRatio === "9:16" && videoWidth > 0 && videoHeight > 0) {
+        const targetW = Math.round(videoHeight * 9 / 16);
+        const cropW = Math.min(targetW, videoWidth);
+        const maxX = videoWidth - cropW;
+        const cropX = Math.round(maxX * (cropPosition / 100));
+        filters.push(`crop=${cropW}:${videoHeight}:${cropX}:0`);
+      }
+
+      if (captionsEnabled && transcriptSegments.length > 0) {
+        const srt = generateSrt(transcriptSegments, clipStart, clipEnd);
+        await ffmpeg.writeFile("subs.srt", new TextEncoder().encode(srt));
+        const subStyle = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1";
+        filters.push(`subtitles=subs.srt:force_style='${subStyle}'`);
+      }
+
+      if (needsReencode) {
+        if (filters.length > 0) {
+          args.push("-vf", filters.join(","));
+        }
+        args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23");
+        args.push("-c:a", "aac", "-b:a", "128k");
+      } else {
+        args.push("-c", "copy");
+      }
+
+      args.push("-avoid_negative_ts", "make_zero", outputName);
+      const exitCode = await ffmpeg.exec(args);
+      if (exitCode !== 0) {
+        throw new Error(`ffmpeg exited with code ${exitCode}`);
+      }
+
+      const data = await ffmpeg.readFile(outputName);
+      const blob = new Blob([new Uint8Array(data as Uint8Array)], {
+        type: exportFormat === "mp4" ? "video/mp4" : "video/webm",
+      });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      const ratioLabel = aspectRatio === "9:16" ? "_9x16" : "";
+      a.download = `${videoFile.name.replace(/\.[^.]+$/, "")}_short${index + 1}${ratioLabel}.${exportFormat}`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+      try { await ffmpeg.deleteFile("subs.srt"); } catch { /* may not exist */ }
+    } catch (e) {
+      console.error("Export error:", e);
+      setError(`Export failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setExportingClipIndex(null);
+      setExportProgress(0);
+    }
+  };
+
   const handleBatchExport = async () => {
     if (!ffmpegRef.current || !videoFile || clips.length === 0) return;
     setBatchExporting(true);
@@ -903,8 +989,10 @@ export default function EditorPage() {
                   {clips.map((clip, i) => {
                     const color = CLIP_COLORS[i % CLIP_COLORS.length];
                     const isActive = activeClip === i;
+                    const isExportingThis = exportingClipIndex === i;
+                    const anyExporting = exporting || batchExporting || exportingClipIndex !== null;
                     return (
-                      <button
+                      <div
                         key={i}
                         onClick={() => selectClip(i)}
                         className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all cursor-pointer ${
@@ -931,7 +1019,30 @@ export default function EditorPage() {
                         {isActive && (
                           <span className="text-[10px] uppercase tracking-wider text-orange-400 font-medium">Selected</span>
                         )}
-                      </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleExportClip(i); }}
+                          disabled={!loaded || anyExporting}
+                          title="Download this short"
+                          className="px-2.5 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-xs font-medium rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-1.5"
+                        >
+                          {isExportingThis ? (
+                            <>
+                              <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
+                              {exportProgress}%
+                            </>
+                          ) : (
+                            <>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                              </svg>
+                              Download
+                            </>
+                          )}
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1006,7 +1117,7 @@ export default function EditorPage() {
 
                 <button
                   onClick={handleExport}
-                  disabled={!loaded || exporting || clipDuration <= 0}
+                  disabled={!loaded || exporting || batchExporting || exportingClipIndex !== null || clipDuration <= 0}
                   className="px-6 py-2.5 bg-orange-600 hover:bg-orange-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {exporting ? (
@@ -1038,7 +1149,7 @@ export default function EditorPage() {
                 {clips.length > 0 && (
                   <button
                     onClick={handleBatchExport}
-                    disabled={!loaded || exporting || batchExporting}
+                    disabled={!loaded || exporting || batchExporting || exportingClipIndex !== null}
                     className="px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-white font-medium rounded-lg transition-colors cursor-pointer disabled:cursor-not-allowed flex items-center gap-2 text-sm"
                   >
                     {batchExporting ? (
